@@ -38,7 +38,7 @@ Pass `-r` to also generate a new recovery key. It will be printed to stdout. The
 
 Then you'll need to stop Vault, configure it to use the new KMS key and run the following to inject the dumped sealed keys to Vault's live Raft storage. This will hang if Vault is running so you will need to stop it.
 ```
-./vault-seal-recovery [-r] [-f <VAULT_RAFT_DB_PATH>]
+./vault-seal-recovery [-r] [-f <VAULT_RAFT_DB_PATH>] inject
 ```
 
 Passing `-r` will inject the dumped recovery key and config. `-no-root` won't try to inject the sealed root key.
