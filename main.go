@@ -38,7 +38,7 @@ var BOLT_OPTS = &bolt.Options{
 	Timeout:  1 * time.Second,
 }
 
-func mkDestDB(src string, dst string) {
+func fileCopy(src string, dst string) {
 	in, err := os.Open(src)
 	panicErr(err)
 	defer in.Close()
@@ -67,7 +67,7 @@ func checkDB(db *bolt.DB) error {
 // Attempt to retrieve a functional copy of the Raft DB without stopping Vault
 func cloneDB(src string, retries int) *bolt.DB {
 	for {
-		mkDestDB(src, TEMP_PATH_DB)
+		fileCopy(src, TEMP_PATH_DB)
 		db, err := bolt.Open(TEMP_PATH_DB, 0666, BOLT_OPTS)
 		panicErr(err)
 
@@ -85,6 +85,7 @@ func cloneDB(src string, retries int) *bolt.DB {
 	}
 }
 
+// Retrieve an item from the data bucket by key
 func boltGet(db *bolt.DB, key string) ([]byte, error) {
 	var data []byte
 	err := db.View(func(tx *bolt.Tx) error {
@@ -101,6 +102,7 @@ func boltGet(db *bolt.DB, key string) ([]byte, error) {
 	return data, err
 }
 
+// Place an item into the data bucket by key
 func boltPut(db *bolt.DB, key string, buf []byte) error {
 	return db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte("data"))
@@ -111,6 +113,8 @@ func boltPut(db *bolt.DB, key string, buf []byte) error {
 	})
 }
 
+// Extract the root key from Vault's memory
+// It encrypts only one file in Vault's storage: the keyring. Use it for key detection.
 func getRootKey(pid int, db *bolt.DB) (rootKey []byte, err error) {
 	keyring, err := boltGet(db, BOLT_PATH_KEYRING)
 	if err != nil {
@@ -142,6 +146,7 @@ func getRootKey(pid int, db *bolt.DB) (rootKey []byte, err error) {
 	return nil, errors.New("key not found")
 }
 
+// Seals the root key via the provided KMS key and dumps it
 func dumpEncryptedRootKey(ctx context.Context, wrapper *awskms.Wrapper, db *bolt.DB, rootKey []byte) {
 	pt, err := json.Marshal([][]byte{rootKey})
 	panicErr(err)
@@ -161,6 +166,7 @@ func getKMSWrapper(keyId string) (*awskms.Wrapper, error) {
 	return w, err
 }
 
+// Dumps a re-sealed root key and optionally a new sealed recovery key
 func cmdDump(dbPath, kmsKeyId string, vaultPID int, recovery bool) {
 	ctx := context.Background()
 	copyRetries := 10 // max OS copy retries for a locked DB
@@ -183,12 +189,13 @@ func cmdDump(dbPath, kmsKeyId string, vaultPID int, recovery bool) {
 	if recovery {
 		dumpNewRecoveryKey(ctx, kmsWrapper, db)
 	}
-	fmt.Println("Dumping successful. Stop Vault and re-run with the inject command.")
+	fmt.Println("Dump complete. Stop Vault, set the new KMS ID in the seal block and re-run me with the inject command.")
 	if recovery {
 		fmt.Println("Pass -r to the inject command to inject the new recovery key.")
 	}
 }
 
+// Injects dumped blobs into Vault's live storage
 func cmdInject(dbPath string, recovery bool) {
 	db, err := bolt.Open(dbPath, 0666, BOLT_OPTS)
 	panicErr(err)
@@ -215,9 +222,11 @@ func cmdInject(dbPath string, recovery bool) {
 		panicErr(err)
 		fmt.Println("Injected a single-share recovery key config")
 	}
-	fmt.Println("Injection complete. Configure Vault to use the desired KMS key.")
+	fmt.Println("Injection complete. Start Vault to see the changes.")
 }
 
+// Dumps a recovery key configuration that prevents Shamir splitting
+// This lets you use the recovery key as a single string
 func dumpRecoveryConfig(db *bolt.DB) {
 	var conf map[string]interface{}
 	bConf, err := boltGet(db, BOLT_PATH_REC_CONF)
@@ -232,6 +241,8 @@ func dumpRecoveryConfig(db *bolt.DB) {
 	panicErr(err)
 }
 
+// Generates a new KMS-sealed AES-256 key to use as a recovery key
+// The recovery key doesn't encrypt anything, it's just an auth token
 func dumpNewRecoveryKey(ctx context.Context, wrapper *awskms.Wrapper, db *bolt.DB) {
 	// generate a new key
 	pt := make([]byte, 32) // 256bit (AES-256) = 32B
