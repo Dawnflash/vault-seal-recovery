@@ -167,7 +167,7 @@ func getKMSWrapper(keyId string) (*awskms.Wrapper, error) {
 }
 
 // Dumps a re-sealed root key and optionally a new sealed recovery key
-func cmdDump(dbPath, kmsKeyId string, vaultPID int, recovery bool) {
+func cmdDump(dbPath, kmsKeyId string, vaultPID int, recovery bool, root bool) {
 	ctx := context.Background()
 	copyRetries := 10 // max OS copy retries for a locked DB
 
@@ -178,12 +178,14 @@ func cmdDump(dbPath, kmsKeyId string, vaultPID int, recovery bool) {
 	defer os.Remove(TEMP_PATH_DB)
 	defer db.Close()
 
-	// extract root key from live memory (using the sealed keyring)
-	rootKey, err := getRootKey(vaultPID, db)
-	panicErr(err)
-	fmt.Printf("Root key: %s\n", b64.StdEncoding.EncodeToString(rootKey))
-	// re-encrypt the root key
-	dumpEncryptedRootKey(ctx, kmsWrapper, db, rootKey)
+	if root {
+		// extract root key from live memory (using the sealed keyring)
+		rootKey, err := getRootKey(vaultPID, db)
+		panicErr(err)
+		fmt.Printf("Root key: %s\n", b64.StdEncoding.EncodeToString(rootKey))
+		// re-encrypt the root key
+		dumpEncryptedRootKey(ctx, kmsWrapper, db, rootKey)
+	}
 	// (optionally) generate a new recovery key (AES-256), encrypt it, dump it
 	// Also dump a recovery config and modify it to be 1/1 Shamir (avoid shares)
 	if recovery {
@@ -196,18 +198,20 @@ func cmdDump(dbPath, kmsKeyId string, vaultPID int, recovery bool) {
 }
 
 // Injects dumped blobs into Vault's live storage
-func cmdInject(dbPath string, recovery bool) {
+func cmdInject(dbPath string, recovery bool, root bool) {
 	db, err := bolt.Open(dbPath, 0666, BOLT_OPTS)
 	panicErr(err)
 	defer db.Close()
 	err = checkDB(db)
 	panicErr(err)
 
-	blobBytes, err := os.ReadFile(DUMP_PATH_ROOT)
-	panicErr(err)
-	err = boltPut(db, BOLT_PATH_ROOT, blobBytes)
-	panicErr(err)
-	fmt.Println("Injected encrypted root key")
+	if root {
+		blobBytes, err := os.ReadFile(DUMP_PATH_ROOT)
+		panicErr(err)
+		err = boltPut(db, BOLT_PATH_ROOT, blobBytes)
+		panicErr(err)
+		fmt.Println("Injected encrypted root key")
+	}
 
 	if recovery {
 		blobBytes, err := os.ReadFile(DUMP_PATH_REC_KEY)
@@ -263,6 +267,7 @@ func main() {
 	dbPath := flag.String("f", "/var/vault/vault.db", "Live Vault Raft storage location")
 	kmsKeyId := flag.String("k", "", "Target AWS KMS key")
 	recovery := flag.Bool("r", false, "Generate a new recovery key")
+	no_root := flag.Bool("no-root", false, "Skip dumping/injecting the root key")
 
 	flag.Parse()
 
@@ -276,7 +281,7 @@ func main() {
 	switch cmd {
 	case "dump":
 		vaultPID, err := strconv.Atoi(flag.Arg(1))
-		if err != nil {
+		if !*no_root && err != nil {
 			fmt.Println("Pass a running Vault PID!")
 			flag.PrintDefaults()
 			os.Exit(1)
@@ -288,9 +293,9 @@ func main() {
 			os.Exit(1)
 		}
 
-		cmdDump(*dbPath, *kmsKeyId, vaultPID, *recovery)
+		cmdDump(*dbPath, *kmsKeyId, vaultPID, *recovery, !*no_root)
 	case "inject":
-		cmdInject(*dbPath, *recovery)
+		cmdInject(*dbPath, *recovery, !*no_root)
 	default:
 		fmt.Println("Unknown command. Use dump or inject.")
 	}
