@@ -22,7 +22,7 @@ The tool assumes you've already created a new KMS key. It consists of two steps,
 
 ### Sealed key dump
 
-This step dumps the sealed keys as well as their plain versions to stdout. It requires an unsealed running Vault instance.
+This step dumps the sealed keys to predefined files and their base64 forms to stdout. It requires an unsealed running Vault instance.
 
 Since the Raft DB is locked by the running Vault process, the tool will attempt to make a working temp copy. This may fail on busy instances. Just rerun the dump step if this gives you trouble.
 
@@ -30,11 +30,11 @@ Since the Raft DB is locked by the running Vault process, the tool will attempt 
 ./vault-seal-recovery dump -k <KMS_KEY_ID> [-f <VAULT_RAFT_DB_PATH>] [-r] <VAULT_PID>
 ```
 
-Pass `-r` to also generate a new recovery key. It will be dumped to stdout. The base64 output is factically the key you should use afterwards. `VAULT_PID` must be that of a running unsealed Vault instance.
+Pass `-r` to also generate a new recovery key. It will be printed to stdout. The base64 output is factically the key you should use afterwards. `VAULT_PID` must be that of a running unsealed Vault instance.
 
 ### Sealed key injection
 
-Then you'll need to stop Vault, configure it to use the new KMS key and run
+Then you'll need to stop Vault, configure it to use the new KMS key and run the following to inject the dumped sealed keys to Vault's live Raft storage. This will hang if Vault is running so you will need to stop it.
 ```
 ./vault-seal-recovery inject [-r] [-f <VAULT_RAFT_DB_PATH>]
 ```
